@@ -1,0 +1,84 @@
+// CI pipeline: manual run, everything up to plan, no apply
+pipeline {
+    agent any
+
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()   // avoids two runs fighting over the state lock
+    }
+
+    environment {
+        AWS_DEFAULT_REGION = 'us-east-1'   // change to your region
+        TF_IN_AUTOMATION   = 'true'
+        TF_INPUT           = 'false'
+    }
+
+    stages {
+        stage('Clone repo') {
+            steps {
+                sh '''
+                    if git -C aws-infrastructure rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+                        git -C aws-infrastructure pull --ff-only
+                    elif [ -e aws-infrastructure ]; then
+                        echo "Error: aws-infrastructure exists but is not a Git repository"
+                        exit 1
+                    else
+                        git clone https://github.com/devShaik010/aws-infrastructure.git
+                    fi
+                '''
+            }
+        }
+
+        stage('Format check') {
+            steps {
+                // fails the build if any file is not formatted
+                dir('aws-infrastructure') {
+                    sh 'terraform fmt'
+                }
+            }
+        }
+
+        stage('Init') {
+            environment {
+                AWS_ACCESS_KEY_ID     = credentials('aws-access-key-id')
+                AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
+            }
+            steps {
+                dir('aws-infrastructure') {
+                    sh 'terraform init'
+                }
+            }
+        }
+
+        stage('Validate') {
+            steps {
+                dir('aws-infrastructure') {
+                    sh 'terraform validate'
+                }
+            }
+        }
+
+        stage('Plan') {
+            environment {
+                AWS_ACCESS_KEY_ID     = credentials('aws-access-key-id')
+                AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
+            }
+            steps {
+                dir('aws-infrastructure') {
+                    sh 'terraform plan -out=tfplan'
+                    sh 'terraform show -no-color tfplan > plan.txt'
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            archiveArtifacts artifacts: 'aws-infrastructure/plan.txt', fingerprint: true
+        }
+        cleanup {
+            cleanWs()
+        }
+    }
+}
